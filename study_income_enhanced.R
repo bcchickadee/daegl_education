@@ -1,0 +1,138 @@
+# Importing Dependencies =====
+library(tidyverse); library(haven); library(magrittr); library(showtext); library(ggrepel); library(gt)
+font_add_google("Nanum Myeongjo", "nanum")
+showtext_auto()
+
+# Study Time dataset =====
+## Importing & Tidying Data ======
+study_time <- read_csv("study_time_enhanced.csv", na = "m", locale = locale(encoding = "utf-8")) %>% 
+  group_by(Country) %>% 
+  mutate(Total_after = sum(Science_after + Math_after + Language_after + ForeignLanguage_after + OtherSubjects_after, na.rm = T),
+         Total_total = sum(Total_after + Total_in, na.rm = T)) %>% 
+  filter(Total_total != 0) %>% 
+  select(Total_after, Total_in, Total_total) %>% 
+  arrange(desc(Total_total))
+
+## Visualizing After School Study Time by Country ======
+study_time %>% 
+  ggplot(mapping = aes(x = reorder(Country, Total_after, decreasing = T), y = Total_after)) +
+  geom_col(fill = "orange") +
+  geom_col(data = filter(study_time, Country == "Korea"), fill = "red") +
+  theme_gray(base_family = "nanum") +
+  labs(title = "국가별 학교 수업 외 학습 시간",
+       x = "국가", y = "일주일 당 교외학습 시간", caption = "출처: PISA 보도자료 (2015), 제작: 윤수민") +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) +
+  geom_text_repel(
+    data = study_time[c(1:5, 8, 54:58),],
+    aes(label = paste(Country, ": ", Total_after)), nudge_y = 1
+    )
+
+## Visualizing Total School Study Time by Country ======
+study_time %>% 
+  ggplot(mapping = aes(x = reorder(Country, Total_total, decreasing = T), y = Total_total)) +
+  geom_col(fill = "orange") +
+  geom_col(data = filter(study_time, Country == "Korea"), fill = "red") +
+  theme_gray(base_family = "nanum") +
+  labs(title = "국가별 총 학습 시간",
+       x = "국가", y = "일주일 당 총 학습 시간", caption = "출처: PISA 보도자료 (2015), 제작: 윤수민") +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) +
+  geom_text_repel(
+    data = study_time[c(1:5, 8, 54:58),],
+    aes(label = paste(Country, ": ", Total_total)), nudge_y = 1
+  )
+
+# Earnings by Education Level dataset =====
+## Importing & Tidying Data ======
+earnings <- read_csv("EAG_EARNINGS_01052024153531938.csv") 
+
+### Education levels from lower to higher =======
+education_levels <- c("Below upper secondary education",
+                      "Post-secondary non-tertiary education",
+                      "Tertiary education",
+                      "Upper secondary, post-secondary non-tertiary education and short-cycle tertiary education",
+                      "Short-cycle tertiary education",
+                      "Bachelor’s or equivalent education",
+                      "Bachelor's, Master’s, Doctoral or equivalent education",
+                      "Master’s, Doctoral or equivalent education"
+                      )
+
+### Mutating character columns to factors =======
+earnings %<>%
+  map_df(\(x) if(typeof(x) == "character") factor(x) else x) %>% 
+  mutate(ISC11A...4 = fct_relevel(ISC11A...4, education_levels))
+
+earnings_tidy <- earnings %>% 
+  filter(Indicator == "Relative earnings - upper secondary education = 100",
+         Gender == "Total",
+         Age == "25-64 years",
+         EARN_CATEGORY...10 == "All earners") %>% 
+  select(Country, ISC11A...4, Value) %>% 
+  filter(ISC11A...4 %in% c("Below upper secondary education", "Bachelor’s or equivalent education")) %>% 
+  filter(!is.na(Value)) %>% 
+  spread(ISC11A...4, Value) %>% 
+  mutate(rate = `Bachelor’s or equivalent education` / `Below upper secondary education`) %>% 
+  filter(!is.na(rate)) %>% 
+  arrange(desc(rate))
+
+## Visualizing Relative Earnings by Country ======
+earnings_tidy %>% 
+  ggplot(mapping = aes(x = reorder(Country, rate, decreasing = T), y = rate)) +
+  geom_col(fill = "orange") +
+  geom_col(data = filter(earnings_tidy, Country == "Korea"), fill = "red") +
+  theme_gray(base_family = "nanum") +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) +
+  labs(title = "국가별 교육 수준 간 소득 격차",
+       x = "국가", y = "대졸 이상 연봉 / 고졸 이하 연봉", caption = "출처: OECD, 제작: 윤수민") +
+  geom_text_repel(
+    data = earnings_tidy[c(1:5, 21, 29:33),],
+    aes(label = paste(Country, ": ", round(rate, 2)))
+  )
+  
+
+# Joining two datasets =====
+## Data joining & tidying ======
+study_join <- study_time %>% 
+  left_join(select(earnings_tidy, Country, rate), by = join_by(Country == Country)) %>% 
+  filter(!is.na(rate))
+
+after_study_lm <- study_join %>% 
+  lm(formula = rate ~ Total_after)
+
+total_study_lm <- study_join %>% 
+  lm(formula = rate ~ Total_total)
+
+after_study_formula <- paste0("Formula: y = ",
+                        round(after_study_lm$coefficients[2], 4),
+                        "x + ",
+                        round(after_study_lm$coefficients[1], 4))
+
+total_study_formula <- paste0("Formula: y = ",
+                              round(total_study_lm$coefficients[2], 4),
+                              "x + ",
+                              round(total_study_lm$coefficients[1], 4))
+
+## Visualizing =======
+### After School Study Data =======
+study_join %>% 
+  ggplot(mapping = aes(x = Total_after, y = rate)) +
+  geom_point() +
+  geom_point(data = filter(study_join, Country == "Korea"), color = "red") +
+  geom_smooth(method = "lm") +
+  geom_text_repel(aes(label = paste(Country))) +
+  theme_gray(base_family = "nanum") +
+  labs(title = "국가별 교육 수준 간 소득 격차와 교외 학습 시간 간의 관계",
+       x = "일주일 평균 교외 학습 시간", y = "대졸 이상 연봉 / 고졸 이하 연봉", caption = "출처: OECD, PISA(2015), 제작: 윤수민") +
+  geom_text(aes(x = 13, y = 1.83), label = after_study_formula, angle = (after_study_lm$coefficients[2] / pi * 180 + 1.1))
+
+### Total Study Date =======
+study_join %>% 
+  ggplot(mapping = aes(x = Total_total, y = rate)) +
+  geom_point() +
+  geom_point(data = filter(study_join, Country == "Korea"), color = "red") +
+  geom_smooth(method = "lm") +
+  geom_text_repel(aes(label = paste(Country))) +
+  theme_gray(base_family = "nanum") +
+  labs(title = "국가별 교육 수준 간 소득 격차와 총 학습 시간 간의 관계",
+       x = "일주일 평균 총 학습 시간", y = "대졸 이상 연봉 / 고졸 이하 연봉", caption = "출처: OECD, PISA(2015), 제작: 윤수민") +
+  geom_text(aes(x = 38, y = 1.68), label = total_study_formula, angle = (total_study_lm$coefficients[2] / pi * 180 + 1.1))
+
